@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 import re
 import json
 from product_database import get_product_info, add_product, search_products as search_db_products
-from playwright.sync_api import sync_playwright
+from requests_html import HTMLSession
 import time
 
 app = Flask(__name__)
@@ -43,97 +43,93 @@ def fetch_product_data(barcode):
         url = f"https://smartconsumer-beta.org/01/{barcode}"
         
         try:
-            with sync_playwright() as p:
-                # Launch browser in headless mode
-                browser = p.chromium.launch(headless=True)
-                page = browser.new_page()
-                
-                print(f"🌐 Loading page: {url}")
-                page.goto(url, wait_until='networkidle', timeout=30000)
-                
-                # Wait for content to load (wait for h1 or give it a few seconds)
-                try:
-                    page.wait_for_selector('h1', timeout=10000)
-                    print("✅ Page content loaded")
-                except:
-                    print("⚠️ H1 not found, continuing anyway...")
-                
-                # Extra wait for dynamic content
-                time.sleep(2)
-                
-                # Get the rendered HTML
-                html_content = page.content()
-                browser.close()
-                
-                # Parse with BeautifulSoup
-                soup = BeautifulSoup(html_content, 'html.parser')
-                
-                # Extract product data
-                product_name = None
-                product_mrp = None
-                
-                # Try to find product name from H1
-                h1_elements = soup.find_all('h1')
-                for h1 in h1_elements:
-                    text = h1.get_text(strip=True)
-                    if text and len(text) > 2 and 'smart consumer' not in text.lower():
+            # Use requests-html for JavaScript rendering (lighter than Playwright)
+            session = HTMLSession()
+            
+            print(f"🌐 Loading page: {url}")
+            response = session.get(url, timeout=30)
+            
+            # Render JavaScript content
+            print("⏳ Rendering JavaScript content...")
+            response.html.render(timeout=20, sleep=2)
+            
+            # Get rendered HTML
+            html_content = response.html.html
+            print(f"✅ Page rendered, size: {len(html_content)} bytes")
+            
+            # Parse with BeautifulSoup
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # Extract product data
+            product_name = None
+            product_mrp = None
+            
+            # Try to find product name from H1
+            h1_elements = soup.find_all('h1')
+            print(f"Found {len(h1_elements)} H1 elements")
+            for h1 in h1_elements:
+                text = h1.get_text(strip=True)
+                if text and len(text) > 2 and 'smart consumer' not in text.lower():
+                    product_name = text
+                    print(f"✅ Found product name: {product_name}")
+                    break
+            
+            # Try to find product description from p tag
+            if not product_name:
+                p_elements = soup.find_all('p', class_=re.compile('text-lg|product', re.I))
+                for p in p_elements:
+                    text = p.get_text(strip=True)
+                    if text and len(text) > 5:
                         product_name = text
-                        print(f"✅ Found product name: {product_name}")
+                        print(f"✅ Found product name in p: {product_name}")
                         break
+            
+            # Try to find MRP from spans
+            spans = soup.find_all('span')
+            for span in spans:
+                text = span.get_text(strip=True)
+                # Look for price patterns
+                if re.search(r'₹\s*\d+', text):
+                    price_match = re.search(r'₹\s*(\d+(?:\.\d{2})?)', text)
+                    if price_match:
+                        product_mrp = price_match.group(1)
+                        print(f"✅ Found MRP: ₹{product_mrp}")
+                        break
+                # Check for "View MRP" text
+                if 'view mrp' in text.lower() and not product_mrp:
+                    product_mrp = 'View MRP (requires click)'
+                    print(f"⚠️ Found 'View MRP' button")
+            
+            # Close session
+            session.close()
+            
+            # If we found product data, return it
+            if product_name:
+                # Auto-add to database for future use (only if we have MRP too)
+                if product_mrp and product_mrp != 'View MRP (requires click)':
+                    add_product(barcode, product_name, product_mrp, "General", "Unknown")
+                    print(f"💾 Auto-added to database: {product_name}")
                 
-                # Try to find product description from p tag
-                if not product_name:
-                    p_elements = soup.find_all('p', class_=re.compile('text-lg|product', re.I))
-                    for p in p_elements:
-                        text = p.get_text(strip=True)
-                        if text and len(text) > 5:
-                            product_name = text
-                            print(f"✅ Found product name in p: {product_name}")
-                            break
+                return {
+                    'barcode': barcode,
+                    'name': product_name,
+                    'mrp': product_mrp if product_mrp else 'N/A',
+                    'category': 'General',
+                    'brand': 'Unknown',
+                    'status': 'success'
+                }
+            else:
+                print("❌ No product data found on page")
+                return {
+                    'barcode': barcode,
+                    'name': None,
+                    'mrp': None,
+                    'category': None,
+                    'brand': None,
+                    'status': 'error',
+                    'message': 'Product not found on smartconsumer website'
+                }
                 
-                # Try to find MRP from spans
-                spans = soup.find_all('span')
-                for span in spans:
-                    text = span.get_text(strip=True)
-                    # Look for price patterns
-                    if re.search(r'₹\s*\d+', text):
-                        price_match = re.search(r'₹\s*(\d+(?:\.\d{2})?)', text)
-                        if price_match:
-                            product_mrp = price_match.group(1)
-                            print(f"✅ Found MRP: ₹{product_mrp}")
-                            break
-                    # Check for "View MRP" text
-                    if 'view mrp' in text.lower():
-                        product_mrp = 'View MRP (requires click)'
-                        print(f"⚠️ Found 'View MRP' button")
-                
-                # If we found product data, return it
-                if product_name:
-                    # Auto-add to database for future use
-                    if product_mrp and product_mrp != 'View MRP (requires click)':
-                        add_product(barcode, product_name, product_mrp, "General", "Unknown")
-                        print(f"💾 Auto-added to database: {product_name}")
-                    
-                    return {
-                        'barcode': barcode,
-                        'name': product_name,
-                        'mrp': product_mrp if product_mrp else 'N/A',
-                        'category': 'General',
-                        'brand': 'Unknown',
-                        'status': 'success'
-                    }
-                else:
-                    print("❌ No product data found on page")
-                    return {
-                        'barcode': barcode,
-                        'name': None,
-                        'mrp': None,
-                        'category': None,
-                        'brand': None,
-                        'status': 'error',
-                        'message': 'Product not found on smartconsumer website'
-                    }
-                    
         except Exception as e:
             print(f"❌ Error during automatic scraping: {e}")
             return {
