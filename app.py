@@ -35,8 +35,8 @@ def fetch_product_data(barcode):
                 'status': 'success'
             }
         
-        # If not in database, try web scraping (simplified approach)
-        print("🔍 Not in database, attempting web scraping...")
+        # If not in database, try to verify if product exists on smartconsumer
+        print("🔍 Not in database, checking smartconsumer website...")
         
         url = f"https://smartconsumer-beta.org/01/{barcode}"
         headers = {
@@ -48,32 +48,45 @@ def fetch_product_data(barcode):
         try:
             response = requests.get(url, headers=headers, timeout=10)
             if response.status_code == 200:
-                # For now, since the website requires JavaScript, we'll add a placeholder
-                # In a real scenario, you'd implement proper JavaScript scraping or API calls
+                # Check if the page contains actual product data (not just the basic HTML shell)
+                page_content = response.text
                 
-                # Add the barcode to database for future use (with placeholder data)
-                add_product(barcode, f"Product {barcode}", "0.00", "Unknown", "Unknown")
-                
-                return {
-                    'barcode': barcode,
-                    'name': f'Product {barcode}',
-                    'mrp': '0.00',
-                    'category': 'Unknown',
-                    'brand': 'Unknown',
-                    'status': 'success',
-                    'note': 'Added to database for future reference'
-                }
-        except:
-            pass
+                # If it's just the basic HTML shell (contains only "Smart Consumer" and script tags)
+                if len(page_content) < 1000 and 'Smart Consumer' in page_content and '<div id="root"></div>' in page_content:
+                    print("❌ Product not found on smartconsumer website")
+                    return {
+                        'barcode': barcode,
+                        'name': None,
+                        'mrp': None,
+                        'category': None,
+                        'brand': None,
+                        'status': 'error',
+                        'message': 'Product not found in database or on smartconsumer website'
+                    }
+                else:
+                    # Product exists on website but we can't scrape the data automatically
+                    print("⚠️ Product exists on website but requires manual data entry")
+                    return {
+                        'barcode': barcode,
+                        'name': None,
+                        'mrp': None,
+                        'category': None,
+                        'brand': None,
+                        'status': 'error',
+                        'message': 'Product found on website but requires manual data entry. Please add to database using /api/products endpoint.'
+                    }
+        except Exception as e:
+            print(f"❌ Error checking smartconsumer: {e}")
         
-        # Final fallback
+        # If we can't verify or there's an error, return failure
         return {
             'barcode': barcode,
-            'name': 'Product Not Found',
-            'mrp': 'N/A',
-            'category': 'Unknown',
-            'brand': 'Unknown',
-            'status': 'success'
+            'name': None,
+            'mrp': None,
+            'category': None,
+            'brand': None,
+            'status': 'error',
+            'message': 'Product not found in database and unable to verify on smartconsumer website'
         }
         
     except Exception as e:
@@ -113,7 +126,7 @@ def get_barcode_data_get(barcode):
     product_data = fetch_product_data(barcode)
     
     if product_data['status'] == 'error':
-        return jsonify(product_data), 500
+        return jsonify(product_data), 404  # Not Found
     
     return jsonify(product_data)
 
@@ -146,7 +159,7 @@ def get_barcode_data_post():
     product_data = fetch_product_data(barcode)
     
     if product_data['status'] == 'error':
-        return jsonify(product_data), 500
+        return jsonify(product_data), 404  # Not Found
     
     return jsonify(product_data)
 
