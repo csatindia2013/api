@@ -6,10 +6,10 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 import re
 import time
+import os
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for cross-origin requests from your mobile app
@@ -30,7 +30,7 @@ def scrape_product_with_selenium(barcode):
         
         print(f"🔍 Scraping: {url}")
         
-        # Setup Chrome options for headless browsing
+        # Setup Chrome/Chromium options for headless browsing
         chrome_options = Options()
         chrome_options.add_argument('--headless')
         chrome_options.add_argument('--no-sandbox')
@@ -42,8 +42,27 @@ def scrape_product_with_selenium(barcode):
         chrome_options.add_experimental_option('useAutomationExtension', False)
         chrome_options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
         
+        # Set binary location if specified (for Docker/Render)
+        chrome_bin = os.environ.get('CHROME_BIN')
+        if chrome_bin:
+            chrome_options.binary_location = chrome_bin
+        
         # Initialize Chrome driver
-        service = Service(ChromeDriverManager().install())
+        # Use system chromedriver if available, otherwise use webdriver-manager
+        chromedriver_path = os.environ.get('CHROMEDRIVER_PATH')
+        if chromedriver_path and os.path.exists(chromedriver_path):
+            service = Service(chromedriver_path)
+            print(f"✅ Using system ChromeDriver: {chromedriver_path}")
+        else:
+            # Fallback to webdriver-manager for local development
+            try:
+                from webdriver_manager.chrome import ChromeDriverManager
+                service = Service(ChromeDriverManager().install())
+                print("✅ Using webdriver-manager ChromeDriver")
+            except:
+                service = Service()
+                print("⚠️ Using default ChromeDriver")
+        
         driver = webdriver.Chrome(service=service, options=chrome_options)
         
         # Load the page
