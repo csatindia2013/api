@@ -40,31 +40,44 @@ def fetch_product_data(barcode):
             'status': 'success'
         }
         
-        # Try to find product name and MRP
-        # These selectors might need adjustment based on the actual HTML structure
+        # Try to find product name and MRP based on smartconsumer-beta.org structure
         
-        # Common patterns for product information
+        # For product name - look for main heading or product title
         name_elem = (
             soup.find('h1') or 
-            soup.find('div', class_=re.compile('product.*name', re.I)) or
-            soup.find('span', class_=re.compile('product.*name', re.I))
+            soup.find('h2') or
+            soup.find('div', class_=re.compile('product.*name|product.*title', re.I)) or
+            soup.find('span', class_=re.compile('product.*name|product.*title', re.I)) or
+            soup.find('div', class_=re.compile('title|heading', re.I))
         )
         
         if name_elem:
             product_data['name'] = name_elem.get_text(strip=True)
         
-        # Try to find MRP
-        mrp_elem = (
-            soup.find(string=re.compile('MRP', re.I)) or
-            soup.find('span', class_=re.compile('price|mrp', re.I)) or
-            soup.find('div', class_=re.compile('price|mrp', re.I))
-        )
+        # For MRP - smartconsumer shows "View MRP" button, need to handle this
+        mrp_elem = None
+        
+        # Look for actual price display
+        price_patterns = [
+            soup.find(string=re.compile(r'₹\s*\d+', re.I)),
+            soup.find('span', class_=re.compile('price|mrp|cost', re.I)),
+            soup.find('div', class_=re.compile('price|mrp|cost', re.I)),
+            soup.find(string=re.compile('MRP.*₹', re.I))
+        ]
+        
+        for pattern in price_patterns:
+            if pattern:
+                mrp_elem = pattern
+                break
         
         if mrp_elem:
             if isinstance(mrp_elem, str):
                 # If we found a text node, get the parent and extract price
-                parent = soup.find(string=re.compile('MRP', re.I)).parent
-                mrp_text = parent.get_text(strip=True)
+                try:
+                    parent = soup.find(string=re.compile(r'₹\s*\d+', re.I)).parent
+                    mrp_text = parent.get_text(strip=True)
+                except:
+                    mrp_text = mrp_elem
             else:
                 mrp_text = mrp_elem.get_text(strip=True)
             
@@ -72,6 +85,10 @@ def fetch_product_data(barcode):
             price_match = re.search(r'₹?\s*(\d+(?:\.\d{2})?)', mrp_text)
             if price_match:
                 product_data['mrp'] = price_match.group(1)
+        
+        # If MRP not found but "View MRP" exists, note this
+        if not product_data['mrp'] and soup.find(string=re.compile('View MRP', re.I)):
+            product_data['mrp'] = 'View MRP (click required)'
         
         # If we couldn't find data with specific selectors, try to extract all text
         if not product_data['name'] or not product_data['mrp']:
