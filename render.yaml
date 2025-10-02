@@ -1,12 +1,9 @@
 services:
   - type: web
     name: barcode-api
-    env: python
+    env: docker
     region: oregon
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --timeout 120
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.0
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
 
