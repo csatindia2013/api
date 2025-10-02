@@ -5,6 +5,8 @@ from bs4 import BeautifulSoup
 import re
 import json
 from product_database import get_product_info, add_product, search_products as search_db_products
+from playwright.sync_api import sync_playwright
+import time
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for cross-origin requests from your mobile app
@@ -35,37 +37,93 @@ def fetch_product_data(barcode):
                 'status': 'success'
             }
         
-        # If not in database, try to verify if product exists on smartconsumer
-        print("🔍 Not in database, checking smartconsumer website...")
+        # If not in database, try automatic scraping with JavaScript rendering
+        print("🔍 Not in database, attempting automatic scraping with JavaScript rendering...")
         
         url = f"https://smartconsumer-beta.org/01/{barcode}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/html, */*',
-            'Accept-Language': 'en-US,en;q=0.9',
-        }
         
         try:
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                # Check if the page contains actual product data (not just the basic HTML shell)
-                page_content = response.text
+            with sync_playwright() as p:
+                # Launch browser in headless mode
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
                 
-                # If it's just the basic HTML shell (contains only "Smart Consumer" and script tags)
-                if len(page_content) < 1000 and 'Smart Consumer' in page_content and '<div id="root"></div>' in page_content:
-                    print("❌ Product not found on smartconsumer website")
+                print(f"🌐 Loading page: {url}")
+                page.goto(url, wait_until='networkidle', timeout=30000)
+                
+                # Wait for content to load (wait for h1 or give it a few seconds)
+                try:
+                    page.wait_for_selector('h1', timeout=10000)
+                    print("✅ Page content loaded")
+                except:
+                    print("⚠️ H1 not found, continuing anyway...")
+                
+                # Extra wait for dynamic content
+                time.sleep(2)
+                
+                # Get the rendered HTML
+                html_content = page.content()
+                browser.close()
+                
+                # Parse with BeautifulSoup
+                soup = BeautifulSoup(html_content, 'html.parser')
+                
+                # Extract product data
+                product_name = None
+                product_mrp = None
+                
+                # Try to find product name from H1
+                h1_elements = soup.find_all('h1')
+                for h1 in h1_elements:
+                    text = h1.get_text(strip=True)
+                    if text and len(text) > 2 and 'smart consumer' not in text.lower():
+                        product_name = text
+                        print(f"✅ Found product name: {product_name}")
+                        break
+                
+                # Try to find product description from p tag
+                if not product_name:
+                    p_elements = soup.find_all('p', class_=re.compile('text-lg|product', re.I))
+                    for p in p_elements:
+                        text = p.get_text(strip=True)
+                        if text and len(text) > 5:
+                            product_name = text
+                            print(f"✅ Found product name in p: {product_name}")
+                            break
+                
+                # Try to find MRP from spans
+                spans = soup.find_all('span')
+                for span in spans:
+                    text = span.get_text(strip=True)
+                    # Look for price patterns
+                    if re.search(r'₹\s*\d+', text):
+                        price_match = re.search(r'₹\s*(\d+(?:\.\d{2})?)', text)
+                        if price_match:
+                            product_mrp = price_match.group(1)
+                            print(f"✅ Found MRP: ₹{product_mrp}")
+                            break
+                    # Check for "View MRP" text
+                    if 'view mrp' in text.lower():
+                        product_mrp = 'View MRP (requires click)'
+                        print(f"⚠️ Found 'View MRP' button")
+                
+                # If we found product data, return it
+                if product_name:
+                    # Auto-add to database for future use
+                    if product_mrp and product_mrp != 'View MRP (requires click)':
+                        add_product(barcode, product_name, product_mrp, "General", "Unknown")
+                        print(f"💾 Auto-added to database: {product_name}")
+                    
                     return {
                         'barcode': barcode,
-                        'name': None,
-                        'mrp': None,
-                        'category': None,
-                        'brand': None,
-                        'status': 'error',
-                        'message': 'Product not found in database or on smartconsumer website'
+                        'name': product_name,
+                        'mrp': product_mrp if product_mrp else 'N/A',
+                        'category': 'General',
+                        'brand': 'Unknown',
+                        'status': 'success'
                     }
                 else:
-                    # Product exists on website but we can't scrape the data automatically
-                    print("⚠️ Product exists on website but requires manual data entry")
+                    print("❌ No product data found on page")
                     return {
                         'barcode': barcode,
                         'name': None,
@@ -73,21 +131,20 @@ def fetch_product_data(barcode):
                         'category': None,
                         'brand': None,
                         'status': 'error',
-                        'message': 'Product found on website but requires manual data entry. Please add to database using /api/products endpoint.'
+                        'message': 'Product not found on smartconsumer website'
                     }
+                    
         except Exception as e:
-            print(f"❌ Error checking smartconsumer: {e}")
-        
-        # If we can't verify or there's an error, return failure
-        return {
-            'barcode': barcode,
-            'name': None,
-            'mrp': None,
-            'category': None,
-            'brand': None,
-            'status': 'error',
-            'message': 'Product not found in database and unable to verify on smartconsumer website'
-        }
+            print(f"❌ Error during automatic scraping: {e}")
+            return {
+                'barcode': barcode,
+                'name': None,
+                'mrp': None,
+                'category': None,
+                'brand': None,
+                'status': 'error',
+                'message': f'Failed to scrape product: {str(e)}'
+            }
         
     except Exception as e:
         return {
