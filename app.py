@@ -40,104 +40,66 @@ def fetch_product_data(barcode):
             'status': 'success'
         }
         
-        # Enhanced scraping for smartconsumer-beta.org structure
+        # Precise scraping based on smartconsumer-beta.org HTML structure from dev tools
         
-        # Get all text from the page for analysis
-        page_text = soup.get_text()
+        # Strategy 1: Extract product name from H1 tag (most reliable)
+        # From dev tools: <h1 class="text-2xl font-bold text-gray-900 sm:text-3xl">Chakki Fresh Atta</h1>
+        h1_elem = soup.find('h1', class_=re.compile(r'text-2xl.*font-bold.*text-gray-900'))
+        if h1_elem:
+            product_data['name'] = h1_elem.get_text(strip=True)
         
-        # For product name - try multiple strategies
-        name_candidates = []
-        
-        # Strategy 1: Look for headings
-        for heading in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
-            heading_text = heading.get_text(strip=True)
-            if heading_text and len(heading_text) > 3:
-                name_candidates.append(heading_text)
-        
-        # Strategy 2: Look for text containing "Atta" or "Chakki" (from screenshot)
-        lines = page_text.split('\n')
-        for line in lines:
-            line = line.strip()
-            if ('atta' in line.lower() or 'chakki' in line.lower()) and len(line) > 5:
-                name_candidates.append(line)
-        
-        # Strategy 3: Look for divs/spans with product-related classes
-        for elem in soup.find_all(['div', 'span'], class_=re.compile('product|title|name|heading', re.I)):
-            elem_text = elem.get_text(strip=True)
-            if elem_text and len(elem_text) > 3:
-                name_candidates.append(elem_text)
-        
-        # Strategy 4: Look for meta tags
-        for meta in soup.find_all('meta'):
-            content = meta.get('content', '')
-            if content and ('atta' in content.lower() or 'chakki' in content.lower()):
-                name_candidates.append(content)
-        
-        # Select the best candidate for product name
-        if name_candidates:
-            # Filter out very short or very long candidates
-            filtered_candidates = [name for name in name_candidates if 5 <= len(name) <= 100]
-            if filtered_candidates:
-                # Prefer candidates that contain "Atta" or "Chakki"
-                atta_candidates = [name for name in filtered_candidates if 'atta' in name.lower() or 'chakki' in name.lower()]
-                if atta_candidates:
-                    product_data['name'] = atta_candidates[0]
-                else:
-                    product_data['name'] = filtered_candidates[0]
-        
-        # For MRP - enhanced detection
-        mrp_found = False
-        
-        # Strategy 1: Look for actual price with ₹ symbol
-        price_pattern = re.search(r'₹\s*(\d+(?:\.\d{2})?)', page_text)
-        if price_pattern:
-            product_data['mrp'] = price_pattern.group(1)
-            mrp_found = True
-        
-        # Strategy 2: Look for "View MRP" text
-        if not mrp_found and re.search(r'View MRP', page_text, re.I):
-            product_data['mrp'] = 'View MRP (click required)'
-            mrp_found = True
-        
-        # Strategy 3: Look for any numeric price patterns
-        if not mrp_found:
-            price_patterns = re.findall(r'(\d+\.?\d*)\s*(?:Rs|₹|rupees?)', page_text, re.I)
-            if price_patterns:
-                product_data['mrp'] = price_patterns[0]
-                mrp_found = True
-        
-        # Fallback strategies if primary methods didn't work
+        # Strategy 2: If H1 not found, try other heading selectors
         if not product_data['name']:
-            # Try to extract from page title
-            title = soup.find('title')
-            if title:
-                title_text = title.get_text(strip=True)
-                if title_text and 'smart consumer' not in title_text.lower():
-                    product_data['name'] = title_text
-            
-            # Try to find any meaningful text that could be a product name
-            if not product_data['name']:
-                # Look for text that appears to be product names (capitalized, reasonable length)
-                meaningful_texts = []
-                for line in lines:
-                    line = line.strip()
-                    if (len(line) >= 10 and len(line) <= 50 and 
-                        line[0].isupper() and 
-                        not any(word in line.lower() for word in ['smart', 'consumer', 'search', 'view', 'click', 'mrp'])):
-                        meaningful_texts.append(line)
-                
-                if meaningful_texts:
-                    product_data['name'] = meaningful_texts[0]
+            for heading in soup.find_all(['h1', 'h2', 'h3']):
+                heading_text = heading.get_text(strip=True)
+                if heading_text and len(heading_text) > 3:
+                    product_data['name'] = heading_text
+                    break
         
-        # Final fallback for MRP
+        # Strategy 3: Extract from paragraph with product description
+        # From dev tools: <p class="text-lg text-gray-600 font-medium">Fortune Chakki Fresh Atta 5 KG</p>
+        p_elem = soup.find('p', class_=re.compile(r'text-lg.*text-gray-600.*font-medium'))
+        if p_elem and not product_data['name']:
+            product_data['name'] = p_elem.get_text(strip=True)
+        
+        # Strategy 4: Look for barcode span to confirm we're on the right page
+        # From dev tools: <span class="font-mono text-gray-800 font-medium tracking-wide">8906007289085</span>
+        barcode_span = soup.find('span', class_=re.compile(r'font-mono.*text-gray-800.*font-medium.*tracking-wide'))
+        if barcode_span:
+            found_barcode = barcode_span.get_text(strip=True)
+            if found_barcode == barcode:
+                print(f"✅ Confirmed barcode match: {found_barcode}")
+        
+        # For MRP - look for "View MRP" span
+        # From dev tools: <span class="text-2xl font-bold text-gray-900 cursor-pointer">View MRP</span>
+        mrp_span = soup.find('span', string=re.compile(r'View MRP', re.I))
+        if mrp_span:
+            product_data['mrp'] = 'View MRP (click required)'
+        else:
+            # Alternative: Look for span with specific classes containing "View MRP"
+            mrp_spans = soup.find_all('span', class_=re.compile(r'text-2xl.*font-bold.*cursor-pointer'))
+            for span in mrp_spans:
+                if 'view mrp' in span.get_text(strip=True).lower():
+                    product_data['mrp'] = 'View MRP (click required)'
+                    break
+        
+        # Fallback: Look for any price patterns if "View MRP" not found
         if not product_data['mrp']:
-            # Look for any numeric patterns that could be prices
-            all_numbers = re.findall(r'\b\d{2,5}(?:\.\d{2})?\b', page_text)
-            if all_numbers:
-                # Filter reasonable price ranges (10-10000)
-                price_candidates = [num for num in all_numbers if 10 <= float(num) <= 10000]
-                if price_candidates:
-                    product_data['mrp'] = price_candidates[0]
+            page_text = soup.get_text()
+            price_pattern = re.search(r'₹\s*(\d+(?:\.\d{2})?)', page_text)
+            if price_pattern:
+                product_data['mrp'] = price_pattern.group(1)
+        
+        # Additional fallback for product name
+        if not product_data['name']:
+            # Look for any text containing product keywords
+            page_text = soup.get_text()
+            lines = page_text.split('\n')
+            for line in lines:
+                line = line.strip()
+                if ('atta' in line.lower() or 'chakki' in line.lower()) and len(line) > 5:
+                    product_data['name'] = line
+                    break
         
         return product_data
         
