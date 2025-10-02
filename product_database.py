@@ -122,6 +122,14 @@ PRODUCT_DATABASE = {
         'mrp': '35.00',
         'category': 'Beverages',
         'brand': 'Pepsi'
+    },
+    
+    # L'Oreal Products
+    '8901526400485': {
+        'name': 'Majirel 3',
+        'mrp': '350.00',
+        'category': 'Hair Care',
+        'brand': "L'Oreal"
     }
 }
 
