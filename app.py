@@ -40,65 +40,104 @@ def fetch_product_data(barcode):
             'status': 'success'
         }
         
-        # Try to find product name and MRP based on smartconsumer-beta.org structure
+        # Enhanced scraping for smartconsumer-beta.org structure
         
-        # For product name - look for main heading or product title
-        name_elem = (
-            soup.find('h1') or 
-            soup.find('h2') or
-            soup.find('div', class_=re.compile('product.*name|product.*title', re.I)) or
-            soup.find('span', class_=re.compile('product.*name|product.*title', re.I)) or
-            soup.find('div', class_=re.compile('title|heading', re.I))
-        )
+        # Get all text from the page for analysis
+        page_text = soup.get_text()
         
-        if name_elem:
-            product_data['name'] = name_elem.get_text(strip=True)
+        # For product name - try multiple strategies
+        name_candidates = []
         
-        # For MRP - smartconsumer shows "View MRP" button, need to handle this
-        mrp_elem = None
+        # Strategy 1: Look for headings
+        for heading in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
+            heading_text = heading.get_text(strip=True)
+            if heading_text and len(heading_text) > 3:
+                name_candidates.append(heading_text)
         
-        # Look for actual price display
-        price_patterns = [
-            soup.find(string=re.compile(r'₹\s*\d+', re.I)),
-            soup.find('span', class_=re.compile('price|mrp|cost', re.I)),
-            soup.find('div', class_=re.compile('price|mrp|cost', re.I)),
-            soup.find(string=re.compile('MRP.*₹', re.I))
-        ]
+        # Strategy 2: Look for text containing "Atta" or "Chakki" (from screenshot)
+        lines = page_text.split('\n')
+        for line in lines:
+            line = line.strip()
+            if ('atta' in line.lower() or 'chakki' in line.lower()) and len(line) > 5:
+                name_candidates.append(line)
         
-        for pattern in price_patterns:
-            if pattern:
-                mrp_elem = pattern
-                break
+        # Strategy 3: Look for divs/spans with product-related classes
+        for elem in soup.find_all(['div', 'span'], class_=re.compile('product|title|name|heading', re.I)):
+            elem_text = elem.get_text(strip=True)
+            if elem_text and len(elem_text) > 3:
+                name_candidates.append(elem_text)
         
-        if mrp_elem:
-            if isinstance(mrp_elem, str):
-                # If we found a text node, get the parent and extract price
-                try:
-                    parent = soup.find(string=re.compile(r'₹\s*\d+', re.I)).parent
-                    mrp_text = parent.get_text(strip=True)
-                except:
-                    mrp_text = mrp_elem
-            else:
-                mrp_text = mrp_elem.get_text(strip=True)
-            
-            # Extract numeric value from price text
-            price_match = re.search(r'₹?\s*(\d+(?:\.\d{2})?)', mrp_text)
-            if price_match:
-                product_data['mrp'] = price_match.group(1)
+        # Strategy 4: Look for meta tags
+        for meta in soup.find_all('meta'):
+            content = meta.get('content', '')
+            if content and ('atta' in content.lower() or 'chakki' in content.lower()):
+                name_candidates.append(content)
         
-        # If MRP not found but "View MRP" exists, note this
-        if not product_data['mrp'] and soup.find(string=re.compile('View MRP', re.I)):
+        # Select the best candidate for product name
+        if name_candidates:
+            # Filter out very short or very long candidates
+            filtered_candidates = [name for name in name_candidates if 5 <= len(name) <= 100]
+            if filtered_candidates:
+                # Prefer candidates that contain "Atta" or "Chakki"
+                atta_candidates = [name for name in filtered_candidates if 'atta' in name.lower() or 'chakki' in name.lower()]
+                if atta_candidates:
+                    product_data['name'] = atta_candidates[0]
+                else:
+                    product_data['name'] = filtered_candidates[0]
+        
+        # For MRP - enhanced detection
+        mrp_found = False
+        
+        # Strategy 1: Look for actual price with ₹ symbol
+        price_pattern = re.search(r'₹\s*(\d+(?:\.\d{2})?)', page_text)
+        if price_pattern:
+            product_data['mrp'] = price_pattern.group(1)
+            mrp_found = True
+        
+        # Strategy 2: Look for "View MRP" text
+        if not mrp_found and re.search(r'View MRP', page_text, re.I):
             product_data['mrp'] = 'View MRP (click required)'
+            mrp_found = True
         
-        # If we couldn't find data with specific selectors, try to extract all text
-        if not product_data['name'] or not product_data['mrp']:
-            page_text = soup.get_text()
+        # Strategy 3: Look for any numeric price patterns
+        if not mrp_found:
+            price_patterns = re.findall(r'(\d+\.?\d*)\s*(?:Rs|₹|rupees?)', page_text, re.I)
+            if price_patterns:
+                product_data['mrp'] = price_patterns[0]
+                mrp_found = True
+        
+        # Fallback strategies if primary methods didn't work
+        if not product_data['name']:
+            # Try to extract from page title
+            title = soup.find('title')
+            if title:
+                title_text = title.get_text(strip=True)
+                if title_text and 'smart consumer' not in title_text.lower():
+                    product_data['name'] = title_text
             
-            # Try to find any price-like pattern if MRP not found
-            if not product_data['mrp']:
-                price_patterns = re.findall(r'₹?\s*(\d+(?:\.\d{2})?)', page_text)
-                if price_patterns:
-                    product_data['mrp'] = price_patterns[0]
+            # Try to find any meaningful text that could be a product name
+            if not product_data['name']:
+                # Look for text that appears to be product names (capitalized, reasonable length)
+                meaningful_texts = []
+                for line in lines:
+                    line = line.strip()
+                    if (len(line) >= 10 and len(line) <= 50 and 
+                        line[0].isupper() and 
+                        not any(word in line.lower() for word in ['smart', 'consumer', 'search', 'view', 'click', 'mrp'])):
+                        meaningful_texts.append(line)
+                
+                if meaningful_texts:
+                    product_data['name'] = meaningful_texts[0]
+        
+        # Final fallback for MRP
+        if not product_data['mrp']:
+            # Look for any numeric patterns that could be prices
+            all_numbers = re.findall(r'\b\d{2,5}(?:\.\d{2})?\b', page_text)
+            if all_numbers:
+                # Filter reasonable price ranges (10-10000)
+                price_candidates = [num for num in all_numbers if 10 <= float(num) <= 10000]
+                if price_candidates:
+                    product_data['mrp'] = price_candidates[0]
         
         return product_data
         
